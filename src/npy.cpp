@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cstring>
+#include <sstream>
+#include <filesystem>
 
 std::vector<size_t> NpyArray::strides() const {
     std::vector<size_t> s(shape.size());
@@ -192,4 +194,42 @@ NpyArray load_npy(const std::string& path) {
         }
     }
     return arr;
+}
+
+void save_npy(const std::string& path, const NpyArray& arr) {
+    namespace fs = std::filesystem;
+    if (fs::path(path).has_parent_path()) {
+        fs::create_directories(fs::path(path).parent_path());
+    }
+
+    std::ofstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("npy: cannot open file for writing '" + path + "'");
+
+    const char magic[] = "\x93NUMPY";
+    f.write(magic, 6);
+    uint8_t major = 1, minor = 0;
+    f.write(reinterpret_cast<const char*>(&major), 1);
+    f.write(reinterpret_cast<const char*>(&minor), 1);
+
+    std::ostringstream ss;
+    ss << "{'descr': '<f8', 'fortran_order': False, 'shape': (";
+    for (size_t i = 0; i < arr.shape.size(); i++) {
+        ss << arr.shape[i];
+        if (arr.shape.size() == 1 || i + 1 < arr.shape.size()) ss << ", ";
+    }
+    ss << "), }";
+    std::string header_dict = ss.str();
+
+    size_t unpadded_len = 10 + header_dict.size() + 1; // 10 preamble, 1 for '\n'
+    size_t remainder = unpadded_len % 64;
+    size_t pad_len = (remainder == 0) ? 0 : (64 - remainder);
+
+    std::string header = header_dict + std::string(pad_len, ' ') + "\n";
+    uint16_t header_len = static_cast<uint16_t>(header.size());
+
+    f.write(reinterpret_cast<const char*>(&header_len), 2);
+    f.write(header.data(), header.size());
+
+    f.write(reinterpret_cast<const char*>(arr.data.data()), arr.data.size() * sizeof(double));
+    if (!f) throw std::runtime_error("npy: error writing data to '" + path + "'");
 }

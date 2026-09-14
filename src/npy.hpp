@@ -22,3 +22,6 @@ struct NpyArray {
 
 // Throws std::runtime_error on any parsing/format problem.
 NpyArray load_npy(const std::string& path);
+
+// Saves an NpyArray to a file in NumPy .npy (v1.0) format.
+void save_npy(const std::string& path, const NpyArray& arr);

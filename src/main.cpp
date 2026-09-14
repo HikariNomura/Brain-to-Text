@@ -285,6 +285,18 @@ int main() {
 
         std::vector<AggResult> word_results;
 
+        const int num_layers = layers + 1; // 32
+        const int num_channels = 21;
+        const int num_samples = eeg_sr; // 1000
+
+        NpyArray pred_array;
+        pred_array.shape = {(size_t)num_layers, (size_t)num_channels, (size_t)num_samples};
+        pred_array.data.resize(num_layers * num_channels * num_samples, 0.0);
+
+        NpyArray test_array;
+        test_array.shape = {(size_t)num_layers, (size_t)num_channels, (size_t)num_samples};
+        test_array.data.resize(num_layers * num_channels * num_samples, 0.0);
+
         for (int layer = 0; layer <= layers; layer++) {
             std::cout << "\nLayer " << layer << "\n";
 
@@ -343,6 +355,9 @@ int main() {
                 fold_r2.reserve(splits.size());
                 fold_reg.reserve(splits.size());
 
+                Eigen::VectorXd ensemble_y_pred = Eigen::VectorXd::Zero(eeg_sr);
+                Eigen::VectorXd ensemble_y_test = Eigen::VectorXd::Zero(eeg_sr);
+
                 for (size_t fold = 0; fold < splits.size(); fold++) {
                     const FoldSplit& sp = splits[fold];
 
@@ -384,9 +399,21 @@ int main() {
                     fold_r2.push_back(r2);
                     fold_reg.push_back(reg_candidates[best_idx]);
 
+                    ensemble_y_pred += y_pred;
+                    ensemble_y_test += mean_y_test;
+
                     std::cout << "Fold " << (fold + 1) << " reg=" << reg_candidates[best_idx]
                               << " r=" << std::fixed << std::setprecision(4) << r
                               << " r2=" << r2 << "\n";
+                }
+
+                ensemble_y_pred /= (double)splits.size();
+                ensemble_y_test /= (double)splits.size();
+
+                size_t base_idx = (size_t)layer * (num_channels * num_samples) + (size_t)channel_idx * num_samples;
+                for (int t = 0; t < num_samples; t++) {
+                    pred_array.data[base_idx + t] = ensemble_y_pred(t);
+                    test_array.data[base_idx + t] = ensemble_y_test(t);
                 }
 
                 double mr = mean_of(fold_r);
@@ -410,6 +437,12 @@ int main() {
         std::string out_path = "../data/" + today + "/" + hikensya[hikensya_choice] + "/mtrf_agg_" + word + ".csv";
         write_agg_csv(out_path, word_results);
         std::cout << "\nSaved: " << out_path << " (" << word_results.size() << " rows)\n";
+
+        std::string pred_out_path = "../data/" + today + "/" + hikensya[hikensya_choice] + "/mtrf_pred_" + word + ".npy";
+        std::string test_out_path = "../data/" + today + "/" + hikensya[hikensya_choice] + "/mtrf_test_" + word + ".npy";
+        save_npy(pred_out_path, pred_array);
+        save_npy(test_out_path, test_array);
+        std::cout << "Saved: " << pred_out_path << " & " << test_out_path << "\n";
     }
     }
     }
