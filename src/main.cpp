@@ -131,6 +131,30 @@ Eigen::MatrixXd extract_condition_channel(const NpyArray& eeg, int condition_idx
     return Y;
 }
 
+// 指定条件の全チャネルを一括抽出する．
+// 戻り値: (n_trials, n_channels * n_time) 行列．
+// 列レイアウト: [ch0_t0..ch0_tT-1, ch1_t0..ch1_tT-1, ..., ch_{C-1}_t0..]
+Eigen::MatrixXd extract_condition_all_channels(const NpyArray& eeg, int condition_idx, int n_time) {
+    if (eeg.ndim() != 4) throw std::runtime_error("expected eeg to be a 4-D array");
+    size_t n_trials = eeg.shape[0];
+    size_t n_cond   = eeg.shape[1];
+    size_t n_chan   = eeg.shape[2];
+    size_t T        = eeg.shape[3];
+    if ((size_t)condition_idx >= n_cond || (size_t)n_time > T)
+        throw std::runtime_error("extract_condition_all_channels: index out of range");
+    auto strides = eeg.strides();
+    Eigen::MatrixXd Y_all((Eigen::Index)n_trials, (Eigen::Index)(n_chan * n_time));
+    for (size_t trial = 0; trial < n_trials; trial++) {
+        size_t base_cond = trial * strides[0] + (size_t)condition_idx * strides[1];
+        for (size_t ch = 0; ch < n_chan; ch++) {
+            size_t base = base_cond + ch * strides[2];
+            for (int t = 0; t < n_time; t++)
+                Y_all((Eigen::Index)trial, (Eigen::Index)(ch * n_time + t)) = eeg.data[base + t];
+        }
+    }
+    return Y_all;
+}
+
 NpyArray apply_eeg_lowpass(const NpyArray& eeg, int sr) {
     auto [b, a] = butterworth::design_lowpass(4, 20.0 / (sr / 2.0));
     NpyArray out = eeg;
@@ -249,6 +273,22 @@ void write_agg_csv(const std::string& path, const std::vector<AggResult>& rows) 
 } // namespace
 
 int main() {
+    // [最適化7] cout の stdio 同期を無効化してログ出力の I/O コストを削減
+    std::ios::sync_with_stdio(false);
+
+    // [最適化5] lags は tmin/tmax/eeg_sr のみに依存 → 全ループ外で1回だけ構築
+    std::vector<int> lags;
+    for (int l = (int)std::floor(tmin * eeg_sr); l <= (int)std::ceil(tmax * eeg_sr); l++)
+        lags.push_back(l);
+
+    // [最適化6] eeg_time / whisper_time はいずれも定数 → 全ループ外で1回だけ構築
+    std::vector<double> eeg_time(eeg_sr);
+    for (int t = 0; t < eeg_sr; t++) eeg_time[t] = (double)t / eeg_sr;
+
+    const int valid_frames = (int)(audio_length_sec * whisper_sr); // 150
+    std::vector<double> whisper_time(valid_frames);
+    for (int t = 0; t < valid_frames; t++) whisper_time[t] = (double)t / whisper_sr;
+
     for (int k = 0; k < 3; k++) {
         hikensya_choice = k;
     for (int i = 0; i < 4; i++) {
@@ -258,7 +298,7 @@ int main() {
     std::vector<std::string> words = {word_list[wordchoice] + oto[0], word_list[wordchoice] + oto[1]};
     int layers = 31;
 
-    const char* eeg_root_env = std::getenv("MTRF_EEG_ROOT");
+    const char* eeg_root_env    = std::getenv("MTRF_EEG_ROOT");
     const char* whisper_root_env = std::getenv("MTRF_WHISPER_ROOT");
     const std::string eeg_root =
         eeg_root_env ? eeg_root_env : "C:/Users/Kurisu/Desktop/Working2024/NPY/03_PreProCutEEG";
@@ -279,15 +319,23 @@ int main() {
     const NpyArray& eeg_used = (EEG_bandpass || EEG_lowpass) ? eeg_filtered : eeg;
     fs::create_directories(today);
 
+    // [最適化4] sizing / splits は n_trials にのみ依存 → EEG ロード後に1回だけ計算
+    int n_trials = (int)eeg_used.shape[0];
+    FoldSizing sizing = choose_fold_sizing(n_trials, TEST_N, TUNE_N);
+    std::cout << "Fold sizing: chunk=" << sizing.chunk_size
+              << " (test=" << sizing.test_n << ", tune=" << sizing.tune_n << ")"
+              << ", n_folds=" << sizing.n_folds << "\n";
+    std::vector<FoldSplit> splits = make_fold_splits(n_trials, sizing.test_n, sizing.tune_n);
+
     for (const std::string& word : words) {
         std::cout << std::string(60, '=') << "\n" << word << "\n" << std::string(60, '=') << "\n";
         int condition_idx = condition_map.at(word);
 
         std::vector<AggResult> word_results;
 
-        const int num_layers = layers + 1; // 32
+        const int num_layers   = layers + 1; // 32
         const int num_channels = 21;
-        const int num_samples = eeg_sr; // 1000
+        const int num_samples  = eeg_sr;     // 1000
 
         NpyArray pred_array;
         pred_array.shape = {(size_t)num_layers, (size_t)num_channels, (size_t)num_samples};
@@ -297,6 +345,37 @@ int main() {
         test_array.shape = {(size_t)num_layers, (size_t)num_channels, (size_t)num_samples};
         test_array.data.resize(num_layers * num_channels * num_samples, 0.0);
 
+        // [最適化3] 全チャネルを1回まとめて抽出: shape (n_trials, n_channels * n_time)
+        // EEGデータは layer によらず不変なので word ループ内・layer ループ外で計算
+        std::cout << "EEG shape[0..3] : (" << eeg_used.shape[0] << ", " << eeg_used.shape[1]
+                  << ", " << eeg_used.shape[2] << ", " << eeg_used.shape[3] << ")\n";
+        Eigen::MatrixXd Y_all = extract_condition_all_channels(eeg_used, condition_idx, eeg_sr);
+
+        // [最適化3] fold ごとの train/tune/test 平均を全チャネル同時に事前計算
+        // fold_means[f].{train,tune,test}: shape (n_channels * n_time,)
+        // layer ループをまたいで変わらないため、ここで一度だけ計算する
+        struct FoldMeans {
+            Eigen::RowVectorXd train;
+            Eigen::RowVectorXd tune;
+            Eigen::RowVectorXd test;
+        };
+        std::vector<FoldMeans> fold_means(splits.size());
+        {
+            int ncT = num_channels * num_samples;
+            for (size_t fold = 0; fold < splits.size(); fold++) {
+                const FoldSplit& sp = splits[fold];
+                fold_means[fold].train = Eigen::RowVectorXd::Zero(ncT);
+                fold_means[fold].tune  = Eigen::RowVectorXd::Zero(ncT);
+                fold_means[fold].test  = Eigen::RowVectorXd::Zero(ncT);
+                for (int t : sp.train_trials) fold_means[fold].train += Y_all.row(t);
+                fold_means[fold].train /= (double)sp.train_trials.size();
+                for (int t : sp.tune_trials)  fold_means[fold].tune  += Y_all.row(t);
+                fold_means[fold].tune  /= (double)sp.tune_trials.size();
+                for (int t : sp.test_trials)  fold_means[fold].test  += Y_all.row(t);
+                fold_means[fold].test  /= (double)sp.test_trials.size();
+            }
+        }
+
         for (int layer = 0; layer <= layers; layer++) {
             std::cout << "\nLayer " << layer << "\n";
 
@@ -305,50 +384,25 @@ int main() {
             whisper_npy.squeeze();
             Eigen::MatrixXd whisper_full = npy2d_to_matrix(whisper_npy);
 
-            int valid_frames = (int)(audio_length_sec * whisper_sr);
-            if (whisper_full.rows() < valid_frames) {
+            if (whisper_full.rows() < valid_frames)
                 throw std::runtime_error("whisper array shorter than audio_length_sec*whisper_sr");
-            }
             Eigen::MatrixXd whisper = whisper_full.topRows(valid_frames);
             std::cout << "Whisper : (" << whisper.rows() << ", " << whisper.cols() << ")\n";
-            std::cout << "EEG shape[0..3] : (" << eeg_used.shape[0] << ", " << eeg_used.shape[1]
-                      << ", " << eeg_used.shape[2] << ", " << eeg_used.shape[3] << ")\n";
 
             Eigen::MatrixXd whisper_pca = pca_fit_transform(whisper, 10);
             std::cout << "After PCA : (" << whisper_pca.rows() << ", " << whisper_pca.cols() << ")\n";
 
-            std::vector<double> whisper_time(valid_frames), eeg_time(eeg_sr);
-            for (int t = 0; t < valid_frames; t++) whisper_time[t] = (double)t / whisper_sr;
-            for (int t = 0; t < eeg_sr; t++) eeg_time[t] = (double)t / eeg_sr;
             Eigen::MatrixXd X = linear_interp_extrapolate(whisper_time, whisper_pca, eeg_time);
             std::cout << "Stimulus : (" << X.rows() << ", " << X.cols() << ")\n";
 
-            int n_trials = (int)eeg_used.shape[0];
-
-            // n_trialsに応じて、target=test80/tune5(chunk20)に一番近い約数を自動選択
-            FoldSizing sizing = choose_fold_sizing(n_trials, TEST_N, TUNE_N);
-            std::cout << "Fold sizing: chunk=" << sizing.chunk_size
-                      << " (test=" << sizing.test_n << ", tune=" << sizing.tune_n << ")"
-                      << ", n_folds=" << sizing.n_folds << "\n";
-
-            std::vector<FoldSplit> splits = make_fold_splits(n_trials, sizing.test_n, sizing.tune_n);
-
-            std::vector<int> lags;
-            for (int l = (int)std::floor(tmin * eeg_sr); l <= (int)std::ceil(tmax * eeg_sr); l++) {
-                lags.push_back(l);
-            }
-
             std::vector<TrfContext> ctx_candidates;
             ctx_candidates.reserve(reg_candidates.size());
-            for (double reg : reg_candidates) {
+            for (double reg : reg_candidates)
                 ctx_candidates.push_back(build_trf_context(X, lags, reg, eeg_sr));
-            }
 
             for (int channel_idx = 0; channel_idx < 21; channel_idx++) {
                 std::cout << std::string(50, '=') << "\nChannel " << channel_idx << "\n"
                           << std::string(50, '=') << "\n";
-
-                Eigen::MatrixXd Y = extract_condition_channel(eeg_used, condition_idx, channel_idx, eeg_sr);
 
                 std::vector<double> fold_r, fold_r2, fold_reg;
                 fold_r.reserve(splits.size());
@@ -358,41 +412,37 @@ int main() {
                 Eigen::VectorXd ensemble_y_pred = Eigen::VectorXd::Zero(eeg_sr);
                 Eigen::VectorXd ensemble_y_test = Eigen::VectorXd::Zero(eeg_sr);
 
+                const int seg_start = channel_idx * num_samples;
+
                 for (size_t fold = 0; fold < splits.size(); fold++) {
-                    const FoldSplit& sp = splits[fold];
+                    // [最適化3] 事前計算した fold 平均から該当チャネルのセグメントを参照
+                    Eigen::VectorXd mean_y_train =
+                        fold_means[fold].train.segment(seg_start, num_samples).transpose();
+                    Eigen::VectorXd mean_y_tune =
+                        fold_means[fold].tune.segment(seg_start, num_samples).transpose();
+                    Eigen::VectorXd mean_y_test =
+                        fold_means[fold].test.segment(seg_start, num_samples).transpose();
 
                     // ------------------------------------------
-                    // train: 80試行(自動決定サイズ)を平均
+                    // tune: 候補regごとにy_predをキャッシュしながら最良regを選ぶ
+                    // [最適化1] 選択後に solve_weights を再実行しない
                     // ------------------------------------------
-                    Eigen::VectorXd mean_y_train = average_rows(Y, sp.train_trials);
-
-                    // ------------------------------------------
-                    // tune: 5試行を平均し、候補regの中から最良のものを選ぶ
-                    // ------------------------------------------
-                    Eigen::VectorXd mean_y_tune = average_rows(Y, sp.tune_trials);
-
                     int best_idx = -1;
                     double best_tune_r = -std::numeric_limits<double>::infinity();
+                    std::vector<Eigen::VectorXd> y_pred_cache(reg_candidates.size());
                     for (size_t ci = 0; ci < reg_candidates.size(); ci++) {
                         Eigen::MatrixXd w = ctx_candidates[ci].solve_weights(mean_y_train);
-                        Eigen::VectorXd y_pred = ctx_candidates[ci].predict(w).col(0);
-                        double tune_r = pearson_r(mean_y_tune, y_pred);
-                        if (tune_r > best_tune_r) {
-                            best_tune_r = tune_r;
-                            best_idx = (int)ci;
-                        }
+                        y_pred_cache[ci]  = ctx_candidates[ci].predict(w).col(0);
+                        double tune_r = pearson_r(mean_y_tune, y_pred_cache[ci]);
+                        if (tune_r > best_tune_r) { best_tune_r = tune_r; best_idx = (int)ci; }
                     }
-                    const TrfContext& ctx_selected = ctx_candidates[best_idx];
-
-                    Eigen::MatrixXd w = ctx_selected.solve_weights(mean_y_train);
-                    Eigen::VectorXd y_pred = ctx_selected.predict(w).col(0);
+                    // 再計算なしでキャッシュ済みの予測を使用
+                    const Eigen::VectorXd& y_pred = y_pred_cache[best_idx];
 
                     // ------------------------------------------
-                    // test: 15試行を"先に平均してから"1回だけ評価
+                    // test: 事前計算済み mean_y_test で1回だけ評価
                     // ------------------------------------------
-                    Eigen::VectorXd mean_y_test = average_rows(Y, sp.test_trials);
-
-                    double r = pearson_r(mean_y_test, y_pred);
+                    double r  = pearson_r(mean_y_test, y_pred);
                     double r2 = r2_score(mean_y_test, y_pred);
 
                     fold_r.push_back(r);
@@ -410,16 +460,17 @@ int main() {
                 ensemble_y_pred /= (double)splits.size();
                 ensemble_y_test /= (double)splits.size();
 
-                size_t base_idx = (size_t)layer * (num_channels * num_samples) + (size_t)channel_idx * num_samples;
+                size_t base_idx = (size_t)layer * (num_channels * num_samples) +
+                                  (size_t)channel_idx * num_samples;
                 for (int t = 0; t < num_samples; t++) {
                     pred_array.data[base_idx + t] = ensemble_y_pred(t);
                     test_array.data[base_idx + t] = ensemble_y_test(t);
                 }
 
-                double mr = mean_of(fold_r);
-                double sr = std_of(fold_r, mr);
-                double mr2 = mean_of(fold_r2);
-                double sr2 = std_of(fold_r2, mr2);
+                double mr   = mean_of(fold_r);
+                double sr   = std_of(fold_r, mr);
+                double mr2  = mean_of(fold_r2);
+                double sr2  = std_of(fold_r2, mr2);
                 double mreg = mean_of(fold_reg);
 
                 std::cout << "  => Mean r = " << mr << " (std=" << sr << "), "
@@ -448,4 +499,4 @@ int main() {
     }
 
     return 0;
-}
+}
