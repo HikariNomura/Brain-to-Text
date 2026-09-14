@@ -1,4 +1,5 @@
-# python ./scripts/plot_mtrf_results.py data/nocut --outdir result/nocut 
+# python ./scripts/plot_mtrf_results.py data/nocut --outdir result/nocut
+import argparse
 import math
 from pathlib import Path
 
