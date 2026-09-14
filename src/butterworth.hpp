@@ -88,15 +88,15 @@ inline std::pair<std::vector<double>, std::vector<double>> design_bandpass(int N
     // Analog Butterworth prototype poles (cutoff = 1 rad/s, gain k=1), no zeros.
     std::vector<Cplx> p(N);
     for (int k = 0; k < N; k++) {
-        double theta = M_PI * (2.0 * k + N + 1) / (2.0 * N);
+        double theta = kPi * (2.0 * k + N + 1) / (2.0 * N);
         p[k] = Cplx(std::cos(theta), std::sin(theta));
     }
     std::vector<Cplx> z; // lowpass prototype has no zeros
     double k_gain = 1.0;
 
     double fs = 2.0; // same convention as design_lowpass
-    double warped_low  = 2.0 * fs * std::tan(M_PI * Wn_low  / fs);
-    double warped_high = 2.0 * fs * std::tan(M_PI * Wn_high / fs);
+    double warped_low  = 2.0 * fs * std::tan(kPi * Wn_low  / fs);
+    double warped_high = 2.0 * fs * std::tan(kPi * Wn_high / fs);
     double bw = warped_high - warped_low;
     double wo = std::sqrt(warped_low * warped_high);
 
