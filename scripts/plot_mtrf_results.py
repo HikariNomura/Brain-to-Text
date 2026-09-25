@@ -11,10 +11,10 @@ import matplotlib.pyplot as plt
 plt.rcParams.update({
     "font.size": 18,
     "axes.titlesize": 20,
-    "axes.labelsize": 18,
-    "xtick.labelsize": 18,
-    "ytick.labelsize": 18,
-    "legend.fontsize": 20,
+    "axes.labelsize": 14,
+    "xtick.labelsize": 13,
+    "ytick.labelsize": 13,
+    "legend.fontsize": 14,
     "figure.titlesize": 22,
 })
 
@@ -22,12 +22,38 @@ WORD_LIST = ["ame", "nizi", "momo", "hasi"]
 OTO = ["_d", "_u"]
 
 # チャンネル配置 (5行 x 6列)。空欄は None。
+# データの "channel" 列は 0始まり (ch0〜ch20) なので、ここも0始まりで統一する。
 GRID_LAYOUT = [
-    [7,    8,  None, 17, None, None],
-    [6,    9,    15, 18, None, None],
-    [5,   10,    14, 19,    1,   16],
-    [4,   11,    13, 20,    2,    3],
-    [None, 12, None, 21, None, None],
+    [6,    7,  None, 16, None, None],
+    [5,    8,    14, 17, None, None],
+    [4,    9,    13, 18,    15,   0],
+    [3,   10,    12, 19,    2,    1],
+    [None, 11, None, 20, None, None],
+]
+
+
+CHANNEL_NAMES = [
+    "C6",   # ch0
+    "T8",   # ch1
+    "TP8",  # ch2
+    "F7",   # ch3
+    "F5",   # ch4
+    "F3",   # ch5
+    "F1",   # ch6
+    "FC1",  # ch7
+    "FC3",  # ch8
+    "FC5",  # ch9
+    "FT7",  # ch10
+    "FT9",  # ch11
+    "T7",   # ch12
+    "C5",   # ch13
+    "C3",   # ch14
+    "CP6",  # ch15
+    "CP1",  # ch16
+    "CP3",  # ch17
+    "CP5",  # ch18
+    "TP7",  # ch19
+    "TP9",  # ch20
 ]
 
 # 被験者ラベルに使うマーカー(丸・三角・四角、4人目以降はひし形などで追加)
@@ -291,9 +317,10 @@ def main():
             for j, ch in enumerate(row):
                 if ch is not None:
                     val = grid_values[i, j]
+                    # 表示上の番号は棒グラフ側 (ch + 1) の1始まり表記に合わせる
                     ax.text(
                         j, i,
-                        f"{ch}\n{val:.2f}",
+                        f"{ch + 1}\n{val:.2f}",
                         ha="center", va="center",
                         fontsize=8, color="white",
                     )
@@ -316,6 +343,109 @@ def main():
     plt.close(fig3)
 
     print(f"Saved: {fig3_path}")
+
+    # =====================================================
+    # 6. チャンネル配置図 (全レイヤー平均のみ、部位名表示・数値なし)
+    #    被験者・単語・韻律・レイヤーは全部平均
+    # =====================================================
+    avg_values = pivot_plot["Average"].values
+    vmin6 = avg_values.min()
+    vmax6 = avg_values.max()
+ 
+    fig4, ax4 = plt.subplots(figsize=(5, 3.5))
+ 
+    grid_values6 = np.full((n_rows, n_cols), np.nan)
+    for i, row in enumerate(GRID_LAYOUT):
+        for j, ch in enumerate(row):
+            if ch is not None and ch in pivot_plot.index:
+                grid_values6[i, j] = pivot_plot.loc[ch, "Average"]
+ 
+    masked6 = np.ma.masked_invalid(grid_values6)
+    im4 = ax4.imshow(masked6, cmap="Blues", vmin=vmin6, vmax=vmax6)
+
+    cmap6 = plt.get_cmap("Blues")
+    norm6 = plt.Normalize(vmin=vmin6, vmax=vmax6)
+ 
+    for i, row in enumerate(GRID_LAYOUT):
+        for j, ch in enumerate(row):
+            if ch is not None:
+                name = CHANNEL_NAMES[ch] if 0 <= ch < len(CHANNEL_NAMES) else f"ch{ch}"
+                # r, g, b, _ = cmap6(norm6(val))
+                # luminance = 0.299 * r + 0.587 * g + 0.114 * b
+                # text_color =  "#ffffff" if luminance > 0.39 else "#000000"
+                text_color = "#ffffff" if grid_values6[i,j] > 0.2 else "#000000"
+                val = grid_values6[i,j]
+                ax4.text(
+                    j, i,
+                    f"{name}\n{val:.2f}",
+                    ha="center", va="center",
+                    fontsize=12, color= text_color
+                )
+ 
+    ax4.set_xticks([])
+    ax4.set_yticks([])
+    ax4.axvline(x=3.5, linewidth=2, color="k")
+    fig4.colorbar(im4, ax=ax4, shrink=0.8, label="Correlation (r)" )
+ 
+    fig4_path = outdir / "channel_layout_average.png"
+    fig4.savefig(fig4_path, dpi=150, bbox_inches="tight")
+    plt.close(fig4)
+ 
+    print(f"Saved: {fig4_path}")
+
+
+    # =====================================================
+    # 7. チャンネル配置図 (Layer 20 - Layer 0 の差分を1枚に、部位名表示・数値なし)
+    #    被験者・単語・韻律は全部平均
+    # =====================================================
+    if 0 in pivot.columns and 20 in pivot.columns:
+        diff_series = pivot[20] - pivot[0]
+ 
+        diff_abs_max = diff_series.abs().max()
+        vmin7, vmax7 = -diff_abs_max, diff_abs_max
+ 
+        grid_values7 = np.full((n_rows, n_cols), np.nan)
+        for i, row in enumerate(GRID_LAYOUT):
+            for j, ch in enumerate(row):
+                if ch is not None and ch in diff_series.index:
+                    grid_values7[i, j] = diff_series.loc[ch]
+ 
+        masked7 = np.ma.masked_invalid(grid_values7)
+ 
+        fig5, ax5 = plt.subplots(figsize=(5.5, 3.5))
+        im5 = ax5.imshow(masked7, cmap="coolwarm", vmin=vmin7, vmax=vmax7)
+ 
+        cmap7 = plt.get_cmap("coolwarm")
+        norm7 = plt.Normalize(vmin=vmin7, vmax=vmax7)
+ 
+        for i, row in enumerate(GRID_LAYOUT):
+            for j, ch in enumerate(row):
+                if ch is not None:
+                    name = CHANNEL_NAMES[ch] if 0 <= ch < len(CHANNEL_NAMES) else f"ch{ch}"
+                    val = grid_values7[i, j]
+                    if np.isnan(val):
+                        text_color = "#000000"
+                    else:
+                        r, g, b, _ = cmap7(norm7(val))
+                        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+                        text_color = "#ffffff" if luminance < 0.60 else "#000000"
+                    ax5.text(
+                        j, i,
+                        f"{name}\n{val:.2f}",
+                        ha="center", va="center",
+                        fontsize=12, color=text_color,
+                    )
+ 
+        ax5.set_xticks([])
+        ax5.set_yticks([])
+        ax5.axvline(x=3.5, linewidth=2, color="k")
+        fig5.colorbar(im5, ax=ax5, shrink=0.8, label="Δr (Layer 20 − 0)")
+ 
+        fig5_path = outdir / "channel_layout_layer20_minus_layer0.png"
+        fig5.savefig(fig5_path, dpi=150, bbox_inches="tight")
+        plt.close(fig5)
+ 
+        print(f"Saved: {fig5_path}")
 
 
 if __name__ == "__main__":

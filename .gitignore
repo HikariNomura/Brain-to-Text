@@ -2,4 +2,6 @@ build/
 *.exe
 *.obj
 data/
+data_stash/
 result/
+comparison/
