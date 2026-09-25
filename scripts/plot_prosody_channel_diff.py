@@ -9,7 +9,7 @@ main.cpp が出力する mtrf_pred_<word>.npy / mtrf_test_<word>.npy
 
 レイヤーは以下の3パターンで平均する:
     - 全レイヤー平均 (0-31)
-    - 浅い層平均 (0-3)
+    - 浅い層平均 (0-20)
     - 深い層平均 (20-31)
 
 予測脳波（pred）と実測脳波（test）それぞれについて、3パネル(全平均/浅い層/深い層)の図を出力する．
@@ -18,7 +18,8 @@ main.cpp が出力する mtrf_pred_<word>.npy / mtrf_test_<word>.npy
     python scripts/plot_prosody_channel_diff.py
     python scripts/plot_prosody_channel_diff.py --data-root ../data/0913
     python scripts/plot_prosody_channel_diff.py --today 0913 --output-root ../result
-"""
+    python scripts/plot_prosody_channel_diff.py --data-root ./data/0.5~15Hz  --output-root ./result/0.5~15Hz
+    """
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import morlet2
@@ -35,7 +36,7 @@ N_CHANNELS = 21
 EEG_SR     = 1000  # Hz
 TODAY      = "0913"
 
-SHALLOW_LAYERS = range(0, 4)    # 0-3
+SHALLOW_LAYERS = range(0, 20)    # 0-20
 DEEP_LAYERS = range(20, 32)     # 20-31
 
 # プロット設定: (ファイル接頭辞, 凡例ラベル)
@@ -53,12 +54,36 @@ GRID_LAYOUT = [
     [None, 12, None, 21, None, None],
 ]
 
+CHANNEL_NAMES = [
+    "C6",   # ch1
+    "T8",   # ch2
+    "TP8",  # ch3
+    "F7",   # ch4
+    "F5",   # ch5
+    "F3",   # ch6
+    "F1",   # ch7
+    "FC1",  # ch8
+    "FC3",  # ch9
+    "FC5",  # ch10
+    "FT7",  # ch11
+    "FT9",  # ch12
+    "T7",   # ch13
+    "C5",   # ch14
+    "C3",   # ch15
+    "CP6",  # ch16
+    "CP1",  # ch17
+    "CP3",  # ch18
+    "CP5",  # ch19
+    "TP7",  # ch20
+    "TP9",  # ch21
+]
+
 plt.rcParams.update({
-    "font.size": 15,
-    "axes.titlesize": 18,
-    "axes.labelsize": 16,
-    "xtick.labelsize": 12,
-    "ytick.labelsize": 13,
+    "font.size": 12,
+    "axes.titlesize": 12,
+    "axes.labelsize": 12,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
     "legend.fontsize": 13,
 })
 
@@ -151,7 +176,7 @@ def plot_channel_layout(diff_rms, label, output_path):
 
     panels = [
         ("All layers (0-31)", all_mean),
-        ("Shallow layers (0-3)", shallow_mean),
+        ("Shallow layers (0-19)", shallow_mean),
         ("Deep layers (20-31)", deep_mean),
     ]
 
@@ -176,16 +201,17 @@ def plot_channel_layout(diff_rms, label, output_path):
             for j, ch in enumerate(row):
                 if ch is not None:
                     val = grid_values[i, j]
-                    ax.text(j, i, f"{ch}\n{val:.3f}", ha="center", va="center",
-                            fontsize=8, color="white")
+                    ax.text(j, i, CHANNEL_NAMES[ch - 1],
+                            ha="center", va="center",
+                            fontsize=12, color="white")
 
         ax.set_title(title)
         ax.set_xticks([])
         ax.set_yticks([])
 
     fig.colorbar(im, ax=axes, shrink=0.7,
-                 label="Scalogram Difference RMS\n(Normalized Power, H-L vs L-H)")
-    fig.suptitle(f"Prosody Contrast (H-L vs L-H) by Channel: {label}", fontsize=16)
+                 label="Scalogram Power Difference")
+    # fig.suptitle(f"Prosody Contrast (H-L vs L-H) by Channel: {label}", fontsize=16)
 
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     print(f"画像を保存しました: {output_path.resolve()}")
