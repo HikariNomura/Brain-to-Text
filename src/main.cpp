@@ -45,9 +45,9 @@ const std::vector<std::string> word_list = {"ame", "nizi", "momo", "hasi"};
 const std::vector<std::string> oto = {"_d", "_u"};
 int wordchoice = 0;
 
-const bool EEG_lowpass =false;
+const bool EEG_lowpass = false;
 const bool EEG_bandpass = false;
-const std::string today = "0922";
+const std::string today = "0913";
 
 const double audio_length_sec = 3.0;
 const int eeg_sr = 1000;
@@ -60,11 +60,6 @@ const double tmax = 0.2;
 const int TEST_N = 15;
 const int TUNE_N = 5;
 const std::vector<double> reg_candidates = {0.01, 0.1, 1, 10, 100, 1000, 10000, 100000};
-
-// ---- PCA次元数(層による寄与率の違いに対応) ----
-const int PCA_DIM_SHALLOW = 23;  // 0-19層: 90%寄与率を確保するため23次元
-const int PCA_DIM_DEEP = 10;     // 20層以降: 10次元で90%以上を確保できるため据え置き
-const int PCA_DIM_BOUNDARY = 20; // この層番号以降を「深い層」とする
 
 // n_trialsの約数の中から、target_chunk_sizeに一番近いものを選ぶ。
 // (n_trialsが100と異なる被験者がいても自動で対応するため)
@@ -179,7 +174,7 @@ NpyArray apply_eeg_lowpass(const NpyArray& eeg, int sr) {
 
 NpyArray apply_eeg_bandpass(const NpyArray& eeg, int sr) {
     double nyquist = sr / 2.0;
-    auto [b, a] = butterworth::design_bandpass(3, 8 / nyquist, 13 / nyquist);
+    auto [b, a] = butterworth::design_bandpass(3, 0.5 / nyquist, 15.0 / nyquist);
     NpyArray out = eeg;
     size_t T = eeg.shape[3];
     auto strides = eeg.strides();
@@ -394,11 +389,8 @@ int main() {
             Eigen::MatrixXd whisper = whisper_full.topRows(valid_frames);
             std::cout << "Whisper : (" << whisper.rows() << ", " << whisper.cols() << ")\n";
 
-            // 層に応じてPCA次元数を切り替える(浅い層は情報量を保つため23次元、深い層は10次元のまま)
-            int pca_dim = (layer < PCA_DIM_BOUNDARY) ? PCA_DIM_SHALLOW : PCA_DIM_DEEP;
-            Eigen::MatrixXd whisper_pca = pca_fit_transform(whisper, pca_dim);
-            std::cout << "After PCA : (" << whisper_pca.rows() << ", " << whisper_pca.cols()
-                    << ")  [pca_dim=" << pca_dim << "]\n";
+            Eigen::MatrixXd whisper_pca = pca_fit_transform(whisper, 10);
+            std::cout << "After PCA : (" << whisper_pca.rows() << ", " << whisper_pca.cols() << ")\n";
 
             Eigen::MatrixXd X = linear_interp_extrapolate(whisper_time, whisper_pca, eeg_time);
             std::cout << "Stimulus : (" << X.rows() << ", " << X.cols() << ")\n";
@@ -507,4 +499,4 @@ int main() {
     }
 
     return 0;
-}
+}
