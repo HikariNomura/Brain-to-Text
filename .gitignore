@@ -2,7 +2,11 @@ build/
 *.exe
 *.obj
 data/
+data_speech/
 data_stash/
 result/
+result_speech/
 comparison/
 /third_party/eigen/
+/Whisper_Trial/
+new_npy/
