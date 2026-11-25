@@ -44,7 +44,8 @@ namespace fs = std::filesystem;
 namespace {
 
 // ---- configuration ----
-const std::vector<std::string> hikensya = {"kk", "tr", "ks"};
+// const std::vector<std::string> hikensya = {"kk", "tr", "ks"};
+const std::vector<std::string> hikensya = {"mm"};
 const std::vector<std::string> imi = {"_a", "_n"};
 const int imi_choice = 0;
 
@@ -52,10 +53,10 @@ const std::vector<std::string> word_list = {"ame", "nizi", "momo", "hasi"};
 const std::vector<std::string> oto = {"_d", "_u"};
 
 const bool EEG_lowpass = false;
-const bool EEG_bandpass = true;
+const bool EEG_bandpass = false;
 
 // 聴取版の結果(例: "1014")を上書きしないよう別名にしている
-const std::string out_tag = "1014_speech";
+const std::string out_tag = "1120";
 
 const int eeg_sr = 1000;
 const int whisper_sr = 50;
@@ -63,18 +64,18 @@ const int num_layers = 32;   // layer_0 〜 layer_31
 
 // 刺激→脳波の遅れ(秒). 正の値 = 刺激が脳波より先 (聴取・自分の声のフィードバック向け)
 // 発話に先行する運動関連の活動を見たいときは負のラグ(例: tmin=-0.2, tmax=0.0)にする
-const double tmin = 0.0;
-const double tmax = 0.2;
+const double tmin = -0.5;
+const double tmax = 1.5;
 // ラグの刻み[サンプル]. 特徴量は50 Hz(20ms)なので5msでも情報はほぼ落ちない.
 // 1にすると従来どおり1msごと(列数が5倍 → Gram行列の計算量は約25倍, 連立方程式は約125倍)
-const int lag_step = 5;
+const int lag_step = 20;
 
 // ---- fold構成 & 正則化候補 ----
 // 聴取版は「80試行の平均」を1回学習していたが，発話版は80試行ぶんの行数を使うので
 // Gram行列の規模が大きくなる. 最適な正則化が上側にずれるため候補を 1e6, 1e7 まで拡張している.
 // mean_reg が候補の端(1e7)に張り付く場合はさらに拡張すること.
-const int TEST_N = 15;
-const int TUNE_N = 5;
+const int TEST_N = 8;
+const int TUNE_N = 2;
 const std::vector<double> reg_candidates = {0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000};
 
 struct FoldSizing {
@@ -300,6 +301,7 @@ void write_agg_csv(const std::string& path, const std::vector<AggResult>& rows) 
 
 int main() {
     std::ios::sync_with_stdio(false);
+    std::cout << std::unitbuf;
 
     // ラグ(サンプル)は全ループ外で1回だけ構築
     std::vector<int> lags;
@@ -313,11 +315,11 @@ int main() {
     const char* eeg_root_env     = std::getenv("MTRF_EEG_ROOT");
     const char* whisper_root_env = std::getenv("MTRF_WHISPER_ROOT");
     const std::string eeg_root =
-        eeg_root_env ? eeg_root_env : "C:/Users/Kurisu/Desktop/R8-hikari/Brain-to-Text/New_NPY";
+        eeg_root_env ? eeg_root_env : "C:/Users/Kurisu/Desktop/R8-hikari/Brain-to-Text/New_NPY/rokuon";
         
     // Whisper_FeatureExtraction_Trial.py の出力先 (<作業フォルダ>/Whisper_Trial) に合わせること
     const std::string whisper_root =
-        whisper_root_env ? whisper_root_env : "C:/Users/Kurisu/Desktop/R8-hikari/Brain-to-Text/Whisper_Trial";
+        whisper_root_env ? whisper_root_env : "C:/Users/Kurisu/Desktop/R8-hikari/Brain-to-Text/Whisper_Trial/1120";
         
 
     for (size_t k = 0; k < hikensya.size(); k++) {

@@ -17,6 +17,8 @@ PCAは (条件, 層) ごとに，全試行のフレームをまとめて1回だ�
 (教師なしでEEGは使わないので，train/testの分割とは無関係)
 
 必要なライブラリ: numpy, scipy, scikit-learn, torch, transformers
+
+いちばん最初に回す！
 """
 
 import os
@@ -29,17 +31,19 @@ from sklearn.decomposition import PCA
 from transformers import WhisperFeatureExtractor, WhisperModel
 
 # ---------------------------------------------------------------- 設定
-hikensya = ['kk', 'tr', 'ks']
+# hikensya = ['kk', 'tr', 'ks']
+hikensya = ['mm']
+
 imi = '_a'
 word_list = ['ame', 'nizi', 'momo', 'hasi']
 oto = ['_d', '_u']
 conditions = [w + o for w in word_list for o in oto]  # インデックス0〜7 (C++のcondition_mapと同じ)
 
-AUDIO_SR = 1000       # ★要確認: New_NPY の音声のサンプリング周波数[Hz]
+AUDIO_SR = 16000       # ★要確認: New_NPY の音声のサンプリング周波数[Hz]
 ALLOW_LOW_SR = True   # True にすると AUDIO_SR が低くても(警告のみで)実行する
 WHISPER_SR = 16000     # Whisperの入力は16 kHz固定
 FRAME_RATE = 50        # Whisperエンコーダの出力は20ms/フレーム = 50 Hz
-EXPECTED_WIN_SEC = 1.0 # EEGの切り出し窓 (前0.5s + 後1.0s)
+EXPECTED_WIN_SEC = 2.0 # EEGの切り出し窓 (前0.5s + 後1.0s)
 
 MODEL_NAME = 'openai/whisper-large-v3'
 SAVE_LAYERS = list(range(32))  # C++側の num_layers = 32 (layer_0〜layer_31) に合わせる
@@ -94,7 +98,7 @@ def main():
 
     for sub in hikensya:
         name = sub + imi
-        audio = np.load('./New_NPY/prepare0/' + name + '_Audio.npy').astype(np.float64)
+        audio = np.load('./New_NPY/rokuon/' + name + '_Audio.npy').astype(np.float64)
         print(f'\n=== {name}: audio shape = {audio.shape} ===')
         if audio.ndim != 3 or audio.shape[1] != len(conditions):
             raise ValueError(f'想定は [試行数, {len(conditions)}, サンプル数] ですが {audio.shape} でした')
@@ -111,7 +115,7 @@ def main():
         scale = np.max(np.abs(centered)) + 1e-12
 
         for ci, cond in enumerate(conditions):
-            out_dir = os.path.join('Whisper_Trial/1023/', name, cond)
+            out_dir = os.path.join('Whisper_Trial/1120/', name, cond)
             if all(os.path.exists(os.path.join(out_dir, f'layer_{L}.npy')) for L in SAVE_LAYERS):
                 print(f'  [{cond}] skip (already done)')
                 continue
